@@ -1,0 +1,118 @@
+import { ClienteRepository } from "../repositories/ClienteRepository";
+import { ClienteValidator } from "../validators/ClienteValidator";
+import { ICreateClienteDTO, IUpdateClienteDTO } from "../types/cliente";
+import { getPaginationParams, formatPaginatedResponse } from "../utils/pagination";
+import bcrypt from "bcryptjs";
+
+export class ClienteService {
+  private repository: ClienteRepository;
+
+  constructor() {
+    this.repository = new ClienteRepository();
+  }
+
+  async listarComPaginacao(page?: number, limit?: number) {
+    const { page: pageNum, limit: limitNum, skip } = getPaginationParams({ page, limit });
+    
+    const [clientes, total] = await Promise.all([
+      this.repository.findAllPaginated(skip, limitNum),
+      this.repository.countAll(),
+    ]);
+
+    return formatPaginatedResponse(clientes, total, pageNum, limitNum);
+  }
+
+  async listarTodos() {
+    return this.repository.findAll();
+  }
+
+  async buscarPorId(id: number) {
+    const cliente = await this.repository.findById(id);
+    if (!cliente) throw new Error("Cliente não encontrado");
+    return cliente;
+  }
+
+  async criar(data: any) {
+    this.validarCriacao(data);
+    await this.verificarCpfUnico(data.cpf);
+    
+    if (data.email) {
+      await this.verificarEmailUnico(data.email);
+    }
+
+    return this.repository.create(await this.montarDadosCriacao(data));
+  }
+
+  async atualizar(id: number, data: any) {
+    await this.buscarPorId(id);
+    this.validarAtualizacao(data);
+    
+    if (data.email) {
+      await this.verificarEmailUnicoAtualizacao(data.email, id);
+    }
+
+    return this.repository.update(id, this.montarDadosAtualizacao(data));
+  }
+
+  async deletar(id: number) {
+    // O buscarPorId agora traz os orcamentos vinculados
+    const cliente = await this.buscarPorId(id);
+
+    // ADICIONADO: Regra de integridade
+    if (cliente.orcamentos && cliente.orcamentos.length > 0) {
+      throw new Error("Não é possível excluir este cliente, pois ele possui ordens de serviço vinculadas.");
+    }
+
+    await this.repository.softDelete(id);
+    return { message: "Cliente deletado com sucesso" };
+  }
+
+  // Métodos auxiliares
+  private validarCriacao(data: ICreateClienteDTO) {
+    ClienteValidator.validateCreate(data);
+  }
+
+  private validarAtualizacao(data: IUpdateClienteDTO) {
+    ClienteValidator.validateUpdate(data);
+  }
+
+  private async verificarCpfUnico(cpf?: string) {
+    if (!cpf) return;
+    const existe = await this.repository.findByCpf(cpf);
+    if (existe) throw new Error("CPF já cadastrado");
+  }
+
+  private async verificarEmailUnico(email: string) {
+    const existe = await this.repository.findByEmail(email);
+    if (existe) throw new Error("E-mail já cadastrado");
+  }
+
+  private async verificarEmailUnicoAtualizacao(email: string, id: number) {
+    const existe = await this.repository.findByEmail(email);
+    if (existe && existe.id !== id) throw new Error("E-mail já cadastrado");
+  }
+
+  private async montarDadosCriacao(data: any) {
+    const senhaHash = data.senha ? await bcrypt.hash(data.senha, 10) : null;
+
+    return {
+      nome: data.nome,
+      telefone: data.telefone || null,
+      cpf: data.cpf || null,
+      cnh: data.cnh || null,
+      email: data.email || null,       
+      senha: senhaHash,                
+      permissao: 'CLIENTE',            
+      ativo: true                      
+    };
+  }
+
+  private montarDadosAtualizacao(data: any) {
+    return {
+      nome: data.nome,
+      telefone: data.telefone,
+      email: data.email, 
+      atualizado_em: new Date(),
+    };
+  }
+}
